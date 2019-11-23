@@ -12,9 +12,11 @@ type UDPProxy struct {
 	laddr   *net.UDPAddr
 	backend *net.UDPAddr
 	in      chan []byte
+	conn *net.UDPConn
 }
 
 type Config struct {
+	DogStatsDTagInjectors func(host net.Addr) []string
 	DogStatsDTagNameTransformer map[string]string
 	DogStatsDTagFilterPattern   string
 }
@@ -32,7 +34,7 @@ func NewUDPProxy(network, laddr, backend string, confFunc ...func(*Config)) (*UD
 	if err != nil {
 		return nil, fmt.Errorf("could not parse remote address for udp server: %w", err)
 	}
-	return &UDPProxy{c, local, remote, make(chan []byte, 100)}, nil
+	return &UDPProxy{c, local, remote, make(chan []byte, 100), nil,}, nil
 }
 
 func (up *UDPProxy) Start() error {
@@ -40,18 +42,24 @@ func (up *UDPProxy) Start() error {
 	if err != nil {
 		return fmt.Errorf("unable to create UDP Listener: %w", err)
 	}
-	fmt.Println("listening on %v", up.laddr.String())
+	fmt.Printf("listening on %v\n", up.laddr.String())
+	fmt.Printf("creating %d goroutines", runtime.GOMAXPROCS(-1))
+	up.conn = conn
 	for i := 0; i < runtime.GOMAXPROCS(-1); i++ {
 		go up.startPacketProcessor()
 	}
-	return up.handleUDPPackets(conn)
+	return up.handleUDPPackets()
 }
 
-func (up *UDPProxy) handleUDPPackets(conn *net.UDPConn) error {
-	//defer conn.Close()
+func (up *UDPProxy) handleUDPPackets() error {
+	defer func() {
+		fmt.Println("closing connection")
+		up.conn.Close()
+	}()
+
 	for {
 		buf := make([]byte, MaxUDPPacketBytes)
-		n, _, err := conn.ReadFromUDP(buf)
+		n, _, err := up.conn.ReadFromUDP(buf)
 		if err != nil {
 			fmt.Printf("unable to read from udp: %v", err)
 			continue
@@ -62,10 +70,9 @@ func (up *UDPProxy) handleUDPPackets(conn *net.UDPConn) error {
 }
 
 func (up *UDPProxy) startPacketProcessor() {
-	conn, err := net.Dial("udp", up.backend.String())
-	if err != nil {
-		return
-	}
+	defer func() {
+		fmt.Println("closing packet processor")
+	}()
 	for {
 		select {
 		case buf := <-up.in:
@@ -75,8 +82,7 @@ func (up *UDPProxy) startPacketProcessor() {
 					fmt.Println("unable to parse packet: %v",err)
 				}
 				packet = up.processPacket(packet)
-				fmt.Println(string(packet.Serialize()))
-				_, err = fmt.Fprintf(conn, packet.Serialize())
+				_, err = up.conn.WriteTo([]byte(packet.Serialize()), up.backend)
 				if err != nil {
 					fmt.Printf("unable to write full udp message: %v", err)
 				}

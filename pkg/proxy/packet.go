@@ -15,7 +15,8 @@ var (
 )
 
 const (
-	MaxUDPPacketBytes = 65535
+	// TODO: change this value
+	MaxUDPPacketBytes = 1024
 )
 
 type DogStatsdPacket struct {
@@ -85,6 +86,7 @@ func nextField(slice, sep []byte) ([]byte, []byte) {
 	return slice[:sepIndex], slice[sepIndex+1:]
 }
 
+// TODO: Conditional appending of tags, more efficient serialization...
 func (dsp *DogStatsdPacket) Serialize() string {
 	return fmt.Sprintf("%v:%v|%v|@%v|%v", string(dsp.MetricName), string(dsp.MetricValue), string(dsp.Type), dsp.SampleRate, dsp.Tags)
 }
